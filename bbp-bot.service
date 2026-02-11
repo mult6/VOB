@@ -1,0 +1,27 @@
+[Unit]
+Description=Options Market Maker API Service
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=bbp
+Group=bbp
+WorkingDirectory=/home/bbp/bot
+
+# Environment variables
+EnvironmentFile=/home/bbp/bot/.env
+
+# Virtual environment and Python path
+Environment="PATH=/home/bbp/bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Start command using uvicorn from virtual environment
+ExecStart=/home/bbp/bot/venv/bin/python3 telegram_bot_auto.py
+
+# Restart policy
+Restart=always
+RestartSec=3s
+
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+# Зависимости для Telegram бота
+python-telegram-bot[job-queue]>=20.7  # С поддержкой автоматических уведомлений
+requests==2.31.0
+websockets==12.0  # Для WebSocket real-time обновлений
