@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class OpinionOpenAPI:
     """Клиент для Opinion OpenAPI"""
     
-    BASE_URL = "https://proxy.opinion.trade:8443/openapi"
+    BASE_URL = "https://openapi.opinion.trade/openapi"
     RATE_LIMIT = 15  # Запросов в секунду
     
     # Ограничения платформы (из документации)
@@ -119,10 +119,19 @@ class OpinionOpenAPI:
             response.raise_for_status()
             data = response.json()
             
-            # Проверить стандартный формат ответа
-            if 'code' not in data:
-                logger.error(f"Неверный формат ответа API ({endpoint}): нет поля 'code'")
-                return {'code': -1, 'msg': 'Invalid response format', 'result': None}
+            # API использует errno/errmsg ИЛИ code/msg - поддерживаем оба формата
+            # Нормализуем к единому формату с 'code' и 'msg'
+            if 'errno' in data:
+                data['code'] = data.get('errno', 0)
+                data['msg'] = data.get('errmsg', '')
+            elif 'code' not in data:
+                # Если нет ни errno ни code - считаем успехом если есть result
+                if 'result' in data:
+                    data['code'] = 0
+                    data['msg'] = 'success'
+                else:
+                    logger.error(f"Неверный формат ответа API ({endpoint}): нет поля 'code' или 'errno'")
+                    return {'code': -1, 'msg': 'Invalid response format', 'result': None}
             
             if data.get('code') != 0:
                 msg = data.get('msg', 'Unknown error')
@@ -319,6 +328,88 @@ class OpinionOpenAPI:
             params['quoteTokenName'] = quote_token_name
             
         return self._make_request('GET', 'quoteToken', params)
+    
+    # =====================================================================
+    # ORDER ENDPOINTS (для подписанных ордеров)
+    # =====================================================================
+    
+    def submit_signed_order(self, order_data: Dict) -> Dict:
+        """
+        Отправить предварительно подписанный ордер на биржу
+        
+        Используется для Web Mode, когда пользователь подписывает ордера
+        в браузере, а сервер отправляет их на биржу.
+        
+        ВАЖНО: Этот метод требует API endpoint для подписанных ордеров.
+        Если Opinion API не поддерживает этот endpoint напрямую,
+        используйте opinion_clob_sdk.
+        
+        Args:
+            order_data: Подписанный ордер с полями согласно CTF Exchange:
+                - salt: Уникальный идентификатор
+                - maker: Адрес создателя ордера
+                - signer: Адрес подписанта
+                - taker: Адрес тейкера (0x0 для любого)
+                - tokenId: ID токена YES/NO
+                - makerAmount: Сумма мейкера (в wei, 6 decimals)
+                - takerAmount: Сумма тейкера (в wei, 6 decimals)
+                - expiration: Unix timestamp истечения
+                - nonce: Уникальный nonce
+                - feeRateBps: Комиссия в базисных пунктах
+                - side: 0=BUY, 1=SELL
+                - signatureType: Тип подписи (0=EOA)
+                - signature: EIP-712 подпись
+        
+        Returns:
+            Dict с результатом:
+            {
+                'code': 0,  # 0 = успех
+                'msg': 'success',
+                'result': {
+                    'orderId': '...',
+                    'status': 'open'
+                }
+            }
+        """
+        # Преобразуем данные в формат API
+        payload = {
+            'order': {
+                'salt': str(order_data.get('salt', '')),
+                'maker': order_data.get('maker', ''),
+                'signer': order_data.get('signer', ''),
+                'taker': order_data.get('taker', '0x0000000000000000000000000000000000000000'),
+                'tokenId': str(order_data.get('tokenId', '')),
+                'makerAmount': str(order_data.get('makerAmount', '')),
+                'takerAmount': str(order_data.get('takerAmount', '')),
+                'expiration': int(order_data.get('expiration', 0)),
+                'nonce': str(order_data.get('nonce', '')),
+                'feeRateBps': int(order_data.get('feeRateBps', 0)),
+                'side': int(order_data.get('side', 0)),
+                'signatureType': int(order_data.get('signatureType', 0))
+            },
+            'signature': order_data.get('signature', '')
+        }
+        
+        return self._make_request('POST', 'order/place', payload)
+    
+    def get_order_book(self, token_id: str) -> Dict:
+        """
+        Получить книгу ордеров для токена
+        
+        Альтернативный метод к get_orderbook, возвращает весь response
+        
+        Args:
+            token_id: ID токена
+            
+        Returns:
+            Dict с полями bids, asks
+        """
+        response = self._make_request('GET', 'token/orderbook', {'token_id': token_id})
+        
+        if response.get('code') != 0:
+            return {'bids': [], 'asks': []}
+        
+        return response.get('result', {'bids': [], 'asks': []})
 
 
 # =========================================================================
@@ -409,3 +500,56 @@ def format_orderbook(bids: List[Dict], asks: List[Dict]) -> Dict:
             result['spread_percent'] = (result['spread'] / result['mid_price']) * 100
     
     return result
+
+
+# =========================================================================
+# EXTENDED API METHODS
+# =========================================================================
+
+class OpinionOpenAPIExtended(OpinionOpenAPI):
+    """
+    Расширенный API клиент с поддержкой подписанных ордеров
+    """
+    
+    def submit_signed_order(self, order_data: dict) -> dict:
+        """
+        Отправить предварительно подписанный ордер на биржу
+        
+        Используется для Web Mode, когда пользователь подписывает ордера
+        в браузере, а сервер отправляет их.
+        
+        Args:
+            order_data: Подписанный ордер с полями:
+                - salt, maker, signer, taker
+                - tokenId, makerAmount, takerAmount
+                - expiration, nonce, feeRateBps
+                - side, signatureType, signature
+        
+        Returns:
+            Dict с результатом {code, msg, result}
+        """
+        return self._make_request('POST', 'order/place-signed', order_data)
+    
+    def get_order_status(self, order_id: str) -> dict:
+        """
+        Получить статус ордера по ID
+        
+        Args:
+            order_id: ID ордера
+            
+        Returns:
+            Dict со статусом ордера
+        """
+        return self._make_request('GET', f'order/{order_id}')
+    
+    def cancel_order_by_id(self, order_id: str) -> dict:
+        """
+        Отменить ордер по ID
+        
+        Args:
+            order_id: ID ордера
+            
+        Returns:
+            Dict с результатом отмены
+        """
+        return self._make_request('POST', f'order/cancel', {'orderId': order_id})

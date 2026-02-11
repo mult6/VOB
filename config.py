@@ -14,8 +14,7 @@ load_dotenv()
 # =============================================================================
 
 HOST = os.getenv('HOST', 'https://proxy.opinion.trade:8443')
-# Поддерживаем оба имени для API ключа
-APIKEY = os.getenv('APIKEY', os.getenv('OPINION_API_KEY', ''))
+APIKEY = os.getenv('APIKEY', '')
 RPC_URL = os.getenv('RPC_URL', 'https://bsc-dataseed.binance.org/')
 CHAIN_ID = int(os.getenv('CHAIN_ID', '56'))
 PRIVATE_KEY = os.getenv('PRIVATE_KEY', '')
